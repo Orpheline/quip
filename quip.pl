@@ -11,139 +11,181 @@ quip.pl - A simple cli note-taking app
 
 =head1 SYNOPSIS
 
-This rev. of quip uses Vimwiki for storage, mostly because I'm using Vimwiki and 
-keeping everything in one place appeals to me.
-
-At present there are two uses for quip in Vimwiki:
-    - Recording todo items
-    - Recording short notes and reminders
-
-More use cases may present themselves; for now, I'm limiting this to these two
-pages.
-
 =head1 DESCRIPTION
 
+Quip is a command line tool to capture short notes and tasks.  The goal is to
+capture ad hoc thoughts quickly and with as small an interruption to ones'
+workflow as possible.
 
+Quip assumes the first word following its' call ( C<$0> ) is the note type 
+(ex, note, TODO, etc.) and that all following text is the associated message.
+
+Quip stores its' notes under C<~/quip/>; however, this can be tuned by editing
+C<~/.quiprc.yaml>
+
+NOTE: I have many, many interruptions and digressions in my life, and projects
+may sit idle for weeks or months until I come back to them.  Because of this,
+and because this script is early in development, it is very heavily commented.
+As work progresses and the design and functionality are refined, commentary will
+be cleaned up to something resonably documentary without excessive verbosity.
+
+Yes, that includes this description ;).
 
 =over 4
 
 =cut
 
 use Carp;
-use Data::Dumper;
 use File::Spec;
-use Getopt::Long qw( :config gnu_compat );
 use POSIX( 'strftime' );
 use Storable;
 use Time::HiRes( 'time' );
-
-use Data::Dumper;
+use YAML qw( LoadFile DumpFile );
 
 #--------------------------------------------------------------------------#
 
-# Get the call options.
-my $opts = _parse_cmd_args();
+# Get the quip config.
+my $config = get_config();
 
-# print Dumper $opts;
+# Process the input line.  The first 'word' indicates the operation; any
+# following content is assumed to be a message for that operation.  If the
+# usage evolves towards a more complicated syntax, I may rewrite this to use
+# more traditional command options.
+if ( scalar @ARGV == 0 ) {
+    print "Error: no command or message provided.\n";
+    usage();
+    exit 1;
+}
+my $operation = shift @ARGV;
 
-# At this point we can save either a TODO item or a note.
-my $result;
-
-$result = _save_note();
-
-sub _save_note {
-    my $note = $opts->{note};
-
-    # Does the note page exist?  If not, create it and update index.wiki
-    my $page_name = ( $opts->{page} ) ? $opts->{page} : ( $opts->{action} ) ? 'todo' : 'note';
-
-    my $note_page = _get_wiki_page( $page_name );    
-    # Format note
-    my $ts        = POSIX::strftime( "%Y-%m-%d", localtime );
-    $note         = "[$ts] - $note\n";
-
-    # Add checkbox for TODO items
-    if ( $opts->{action} ) {
-        $note = '[ ] ' . $note;
-    }
-
-    open my $nh, '>>', $note_page or croak( "Could not open $note_page: $! | $@" );
-    print $nh "    * $note";
-    close $nh;
-
-    return;
+# Evaluate predefined operations
+# If usage option is present, display usage and exit
+if ( $operation eq 'usage' ) {
+    usage();
+    exit 0;
 }
 
-sub _get_wiki_page {
-    my ( $page ) = @_;
 
-    my $wiki_dir  = '';
-    my $page_name = $page . '.wiki';
-
-    if ( ! -d $wiki_dir ) {
-        croak( "Could not find Vimwiki directory; exiting!\n" );
-    }
-
-    # Check for page; if it doesn't exist, create it and update index.wiki
-    my $page_file = File::Spec->catfile( $wiki_dir, $page_name );
-    if ( ! -e $page_file ) {
-        print "$page_file does not exist; creating\n";
-
-        open my $fh, '>', $page_file or croak( "Could not create $page_file: $! | $@" );
-        print $fh "= Quip Notes =\n";
-        close $fh;
-
-        # Update index.wiki
-        my $index_file = File::Spec->catfile( $wiki_dir, 'index.wiki' );
-        open $fh, '>>', $index_file or croak( "Could not open $index_file: $! | $@" );
-        print $fh "* [[$page]] - Quip file\n";
-        close $fh;
-    }
-
-    return $page_file;
+# If no content after operation, warn and exit.
+if ( scalar @ARGV == 0 ) {
+    print "Error: no message body for operation!\n";
+    usage();
+    exit 1;
 }
 
-sub _parse_cmd_args {
-    my $opts = {};  # hashref for processed command options
-    my @options = qw(
-        action|a
-        note|n=s
-        page|p=s
-        usage|help|h|u
-    );
+my $message = join ' ', @ARGV;
 
-    GetOptions( $opts, @options );
+my $page = File::Spec->catfile(
+    $config->{quip}{path},
+    $config->{quip}{pages}{ $operation }{page_name},
+);
+my $page_title = $config->{quip}{pages}{ $operation }{title};
 
-    # If usage option is present, display usage and exit
-    if ( $opts->{usage} ) {
-        print _usage();
-        exit 0;
-    }
-
-    # If the note option is NOT present, return an error, display usage, and exit.
-    if ( not $opts->{note} ) {
-        print "Whoops!  You didn't give me a note to save!\n";
-        print _usage();
-        exit 1;
-    }
-
-    return $opts;
+# if the page exists, read it.
+my $content;
+if ( -e $page ) {
+    $content = LoadFile( $page );
+}
+else {
+    $content = {
+        $page_title => [],
+    };
 }
 
-sub _usage {
+# Format message
+my $ts      = POSIX::strftime("%Y-%m-%d_%H:%M:%S", localtime);
+my $message_out;
+# Special formatting for TODO items
+if ( $operation eq 'todo' ) {
+    $message_out = '[ ] ';
+}
+$message_out .= "$ts - $message";
+push @{ $content->{$page_title} }, $message_out;
+DumpFile( $page, $content );
+
+#-------------------------------------------------------------------------------
+=item C<get_config>
+
+Reads the quip.yaml config file.  If the config doesn't exist, create a default.
+
+
+---
+quip:
+  pages:
+    log:
+      page_name: log.yaml
+      title: Log
+    note:
+      page_name: notes.yaml
+      title: Notes
+    todo:
+      page_name: todo.yaml
+      title: TODO
+  path: ~/quip/notebook
+quiprc: ~/.quiprc
+
+
+N.B. a future iteration may add an interactive configuration flow.
+
+returns a hashref of the config.
+
+=cut
+#-------------------------------------------------------------------------------
+sub get_config {
+    # Check for the config file; create if it doesn't exist
+    my $config_file = File::Spec->catfile( $ENV{HOME}, '.quiprc' );
+
+    my $config = LoadFile( $config_file );
+
+    if ( not $config ) {
+        print "First use?  Creating default config...\n";
+        $config = {
+            quiprc          => $config_file,
+            quip => {
+                path  => File::Spec->catfile( $ENV{HOME}, 'quip', 'notebook' ),
+                pages => {
+                    note => {
+                        title     => 'Notes',
+                        page_name => 'notes.yaml',
+                    },
+                    todo  => {
+                        title     => 'TODO',
+                        page_name => 'todo.yaml',
+                    },
+                    log => {
+                        title     => 'Log',
+                        page_name => 'log.yaml',
+                    },
+                },
+            },
+        };
+        save_yaml( $config_file, $config );
+    }
+    
+    return $config;
+}
+
+#-------------------------------------------------------------------------------
+=item C<usage>
+
+Returns the command usage.
+
+=cut
+#-------------------------------------------------------------------------------
+sub usage {
     my $usage = <<"USAGE_END";
 
-quip.pl 
-version: $VERSION
+    quip.pl 
+    version: $VERSION
 
-USAGE:
-    quip --note note             Add a note.
-         [--action]              Optionally make the note an action item. 
-         [--page page]           Optionally specify a page.  If this is not set,
-                                 this will default to 'note' for a note, or 'todo'
-                                 for an action item.  
-    quip help|h|usage            Print help.
+    USAGE:
+        quip [note type] [note text]   Adds a note of the specified note type.
+        quip help|h|usage              Print help.
 
+
+        Example:
+            quip todo Buy coffee at the store
+            quip note Learn more about cats
 USAGE_END
 
     print $usage;
@@ -159,7 +201,7 @@ Liam McNerney
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (c) 2017, Liam McNerney. All rights reserved.
+Copyright (c) 2018, Liam McNerney. All rights reserved.
  
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself. See L<perlartistic>.
