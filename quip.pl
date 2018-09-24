@@ -21,7 +21,7 @@ Quip assumes the first word following its' call ( C<$0> ) is the note type
 (ex, note, TODO, etc.) and that all following text is the associated message.
 
 Quip stores its' notes under C<~/quip/>; however, this can be tuned by editing
-C<~/.quiprc.yaml>
+C<~/.quiprc>
 
 NOTE: I have many, many interruptions and digressions in my life, and projects
 may sit idle for weeks or months until I come back to them.  Because of this,
@@ -36,6 +36,7 @@ Yes, that includes this description ;).
 =cut
 
 use Carp;
+use File::Path qw(make_path );
 use File::Spec;
 use POSIX( 'strftime' );
 use Storable;
@@ -135,14 +136,14 @@ sub get_config {
     # Check for the config file; create if it doesn't exist
     my $config_file = File::Spec->catfile( $ENV{HOME}, '.quiprc' );
 
-    my $config = LoadFile( $config_file );
-
-    if ( not $config ) {
+    if ( not -e $config_file ) {
         print "First use?  Creating default config...\n";
-        $config = {
-            quiprc          => $config_file,
-            quip => {
-                path  => File::Spec->catfile( $ENV{HOME}, 'quip', 'notebook' ),
+
+        my $notebook = File::Spec->catdir( $ENV{HOME}, qw( quip notebook ) );
+        my $config = {
+            quiprc => $config_file,
+            quip   => {
+                path  => $notebook,
                 pages => {
                     note => {
                         title     => 'Notes',
@@ -159,10 +160,15 @@ sub get_config {
                 },
             },
         };
-        save_yaml( $config_file, $config );
+
+        # Make sure the notebook subdirectory exists
+        make_path( $notebook ) or croak "Could not create $notebook: $!";
+        DumpFile( $config_file, $config );
+        
     }
+
+    return LoadFile( $config_file );
     
-    return $config;
 }
 
 #-------------------------------------------------------------------------------
