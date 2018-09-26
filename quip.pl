@@ -2,7 +2,7 @@
 use strict;
 use warnings;
 
-our $VERSION = "0.001_001";
+our $VERSION = "0.001_002";
 $VERSION = eval $VERSION;
 
 =head1 NAME
@@ -39,33 +39,32 @@ use Carp;
 use File::Path qw(make_path );
 use File::Spec;
 use POSIX( 'strftime' );
-use Storable;
 use Time::HiRes( 'time' );
 use YAML qw( LoadFile DumpFile );
 
-#--------------------------------------------------------------------------#
+#-------------------------------------------------------------------------------
 
-# Get the quip config.
+# Get the quip config.  If the config does not load, something quite serious is
+# wrong.
 my $config = get_config();
+croak "Error: no config found!" unless $config;
 
 # Process the input line.  The first 'word' indicates the operation; any
 # following content is assumed to be a message for that operation.  If the
 # usage evolves towards a more complicated syntax, I may rewrite this to use
-# more traditional command options.
+# standard command option syntax.
 if ( scalar @ARGV == 0 ) {
     print "Error: no command or message provided.\n";
     usage();
     exit 1;
 }
-my $operation = shift @ARGV;
+my $op = shift @ARGV;
 
-# Evaluate predefined operations
-# If usage option is present, display usage and exit
-if ( $operation eq 'usage' ) {
+# If $op = 'usage', display usage and exit
+if ( $op eq 'usage' ) {
     usage();
     exit 0;
 }
-
 
 # If no content after operation, warn and exit.
 if ( scalar @ARGV == 0 ) {
@@ -74,59 +73,37 @@ if ( scalar @ARGV == 0 ) {
     exit 1;
 }
 
-my $message = join ' ', @ARGV;
-
-my $page = File::Spec->catfile(
-    $config->{quip}{path},
-    $config->{quip}{pages}{ $operation }{page_name},
-);
-my $page_title = $config->{quip}{pages}{ $operation }{title};
-
-# if the page exists, read it.
-my $content;
-if ( -e $page ) {
-    $content = LoadFile( $page );
-}
-else {
-    $content = {
-        $page_title => [],
-    };
+# Now we're processing messages...
+my $page = File::Spec->catfile( $config->{notebook}, $op );
+if ( ! -e $page ) {
+    print "Could not find notebook page $op; creating it.\n";
+    DumpFile( $page, { $op =>[] } );
 }
 
-# Format message
-my $ts      = POSIX::strftime("%Y-%m-%d_%H:%M:%S", localtime);
-my $message_out;
-# Special formatting for TODO items
-if ( $operation eq 'todo' ) {
-    $message_out = '[ ] ';
-}
-$message_out .= "$ts - $message";
-push @{ $content->{$page_title} }, $message_out;
-DumpFile( $page, $content );
+my $page_content = LoadFile( $page );
+
+push @{ $page_content->{ $op } },
+    POSIX::strftime( "%Y-%m-%d_%H:%M:%S", localtime )  # Record timestamp
+    . ' - '                                            # Field separator
+    . join ' ', @ARGV;                                 # friendly message format
+
+DumpFile( $page, $page_content );
+
+exit 0;
 
 #-------------------------------------------------------------------------------
 =item C<get_config>
 
-Reads the quip.yaml config file.  If the config doesn't exist, create a default.
-
+Reads the quip.yaml config file.  If the config doesn't exist, create one and 
+the default notebook.
 
 ---
-quip:
-  pages:
-    log:
-      page_name: log.yaml
-      title: Log
-    note:
-      page_name: notes.yaml
-      title: Notes
-    todo:
-      page_name: todo.yaml
-      title: TODO
-  path: ~/quip/notebook
+notebook: ~/quip/notebook
 quiprc: ~/.quiprc
 
 
-N.B. a future iteration may add an interactive configuration flow.
+Presently the config contains two values: the location of the config file, and
+the path to the default notebook.
 
 returns a hashref of the config.
 
@@ -137,38 +114,32 @@ sub get_config {
     my $config_file = File::Spec->catfile( $ENV{HOME}, '.quiprc' );
 
     if ( not -e $config_file ) {
-        print "First use?  Creating default config...\n";
+        print "First use; creating default config.\n";
 
         my $notebook = File::Spec->catdir( $ENV{HOME}, qw( quip notebook ) );
         my $config = {
-            quiprc => $config_file,
-            quip   => {
-                path  => $notebook,
-                pages => {
-                    note => {
-                        title     => 'Notes',
-                        page_name => 'notes.yaml',
-                    },
-                    todo  => {
-                        title     => 'TODO',
-                        page_name => 'todo.yaml',
-                    },
-                    log => {
-                        title     => 'Log',
-                        page_name => 'log.yaml',
-                    },
-                },
-            },
+            quiprc   => $config_file,
+            notebook => $notebook,
         };
-
-        # Make sure the notebook subdirectory exists
-        make_path( $notebook ) or croak "Could not create $notebook: $!";
         DumpFile( $config_file, $config );
-        
+
+        # Create default notebook
+        make_path( $notebook ) or croak "Could not create $notebook: $!";
+
+        # Create default pages
+        my @pages = (
+            { name  => 'note', },
+            { name  => 'log',  },
+            { name  => 'todo', },
+        );
+
+        for my $page ( @pages ) {
+            my $content = { $page->{name} => [] };
+            DumpFile( File::Spec->catfile( $notebook, $page->{name} ), $content );
+        }
     }
 
     return LoadFile( $config_file );
-    
 }
 
 #-------------------------------------------------------------------------------
