@@ -1,165 +1,132 @@
 #! /usr/bin/env perl
+
 use strict;
 use warnings;
 
-our $VERSION = "0.001_002";
+our $VERSION = "0.000_001";
 $VERSION = eval $VERSION;
 
-=head1 NAME
-
-quip.pl - A simple cli note-taking app
-
-=head1 SYNOPSIS
-
-=head1 DESCRIPTION
-
-Quip is a command line tool to capture short notes and tasks.  The goal is to
-capture ad hoc thoughts quickly and with as small an interruption to ones'
-workflow as possible.
-
-Quip assumes the first word following its' call ( C<$0> ) is the note type 
-(ex, note, TODO, etc.) and that all following text is the associated message.
-
-Quip stores its' notes under C<~/quip/>; however, this can be tuned by editing
-C<~/.quiprc>
-
-NOTE: I have many, many interruptions and digressions in my life, and projects
-may sit idle for weeks or months until I come back to them.  Because of this,
-and because this script is early in development, it is very heavily commented.
-As work progresses and the design and functionality are refined, commentary will
-be cleaned up to something resonably documentary without excessive verbosity.
-
-Yes, that includes this description ;).
-
-=over 4
-
-=cut
-
 use Carp;
-use File::Path qw(make_path );
+use File::Path qw( make_path );
 use File::Spec;
-use POSIX( 'strftime' );
+use Getopt::Long qw( :config gnu_compat );
+use POSIX ( 'strftime' );
 use Time::HiRes( 'time' );
-use YAML qw( LoadFile DumpFile );
+use YAML::XS qw( Dump Load LoadFile );
 
-#-------------------------------------------------------------------------------
+# Process the command args
+my $opts = parse_cmd_args();
 
-# Get the quip config.  If the config does not load, something quite serious is
-# wrong.
-my $config = get_config();
-croak "Error: no config found!" unless $config;
-
-# Process the input line.  The first 'word' indicates the operation; any
-# following content is assumed to be a message for that operation.  If the
-# usage evolves towards a more complicated syntax, I may rewrite this to use
-# standard command option syntax.
-if ( scalar @ARGV == 0 ) {
-    print "Error: no command or message provided.\n";
-    usage();
-    exit 1;
+# Check whether the notes file is available
+my $file = $ENV{QUIP_NOTES};
+if ( not defined $file ) {
+    croak 'No QUIP_NOTES path defined!';
 }
-my $op = shift @ARGV;
-
-# If $op = 'usage', display usage and exit
-if ( $op eq 'usage' ) {
-    usage();
-    exit 0;
+if ( not -f $file ) {
+    print "$file does not seem to exist; I'll try creating it\n";
 }
 
-# If no content after operation, warn and exit.
-if ( scalar @ARGV == 0 ) {
-    print "Error: no message body for operation!\n";
-    usage();
-    exit 1;
+# Format the note
+my $record = sprintf(
+    "%s,%s,'%s'",
+    get_timestamp(),
+    $opts->{category},
+    $opts->{note},
+);
+
+if ( $opts->{tag} ) {
+    $record .= ',' . join( ':', @{ $opts->{tag} } );
 }
 
-# Now we're processing messages...
-my $page = File::Spec->catfile( $config->{notebook}, $op );
-if ( ! -e $page ) {
-    print "Could not find notebook page $op; creating it.\n";
-    DumpFile( $page, { $op =>[] } );
-}
+$record .= "\n";
 
-my $page_content = LoadFile( $page );
-
-push @{ $page_content->{ $op } },
-    POSIX::strftime( "%Y-%m-%d_%H:%M:%S", localtime )  # Record timestamp
-    . ' - '                                            # Field separator
-    . join ' ', @ARGV;                                 # friendly message format
-
-DumpFile( $page, $page_content );
+# Save
+open my $fh, '>>', $file or croak "Could not open $file: $!";
+print $fh $record;
+close $fh or croak "Could not close $file: $!";
 
 exit 0;
 
-#-------------------------------------------------------------------------------
-=item C<get_config>
+## Returns a millisecond-accurate date/time stamp
+sub get_timestamp {
+    my ( $t ) = @_; 
 
-Reads the quip.yaml config file.  If the config doesn't exist, create one and 
-the default notebook.
+    # If a timestamp was not supplied, use the system time
+    if ( not $t ) { 
+        $t = time;
+    }   
+    my $ts = POSIX::strftime( "%Y-%m-%dT%H:%M:%S", localtime $t );
 
----
-notebook: ~/quip/notebook
-quiprc: ~/.quiprc
+    # Append milliseconds
+    $ts .= sprintf ".%03d", ( $t - int( $t ) ) * 1000;
 
-
-Presently the config contains two values: the location of the config file, and
-the path to the default notebook.
-
-returns a hashref of the config.
-
-=cut
-#-------------------------------------------------------------------------------
-sub get_config {
-    # Check for the config file; create if it doesn't exist
-    my $config_file = File::Spec->catfile( $ENV{HOME}, '.quiprc' );
-
-    if ( not -e $config_file ) {
-        print "First use; creating default config.\n";
-
-        my $notebook = File::Spec->catdir( $ENV{HOME}, qw( quip notebook ) );
-        my $config = {
-            quiprc   => $config_file,
-            notebook => $notebook,
-        };
-        DumpFile( $config_file, $config );
-
-        # Create default notebook
-        make_path( $notebook ) or croak "Could not create $notebook: $!";
-
-        # Create default pages
-        my @pages = (
-            { name  => 'note', },
-            { name  => 'log',  },
-            { name  => 'todo', },
-        );
-
-        for my $page ( @pages ) {
-            my $content = { $page->{name} => [] };
-            DumpFile( File::Spec->catfile( $notebook, $page->{name} ), $content );
-        }
-    }
-
-    return LoadFile( $config_file );
+    return $ts;
 }
 
-#-------------------------------------------------------------------------------
-=item C<usage>
+sub parse_cmd_args {
+    my $opts = {};  # hashref for processed command options
 
-Returns the command usage.
+    my @options = qw(
+        version|v
+        usage|u|help|h
+		category|c=s
+        tag|t=s@
+        note|n=s
+    );
+    GetOptions( $opts, @options );
 
-=cut
-#-------------------------------------------------------------------------------
+    if ( $opts->{version} ) {
+        print "$VERSION\n";
+        exit 0;
+    }
+
+    if ( $opts->{usage} ) {
+        print usage();
+        exit 0;
+    }
+
+    # If no category was provided, default to 'general'
+    $opts->{category} = 'general' if not defined $opts->{category};
+
+    return $opts;
+}
+
 sub usage {
     my $usage = <<"USAGE_END";
 
-    quip.pl 
-    version: $VERSION
+quip.pl
+version: $VERSION
 
-    USAGE:
-        quip [note type] [note text]   Adds a note of the specified note type.
-        quip help|h|usage              Print help.
+Quip is a simple tool for capturing timestamped, tagged notes from
+the command line.
 
+USAGE:
+    quip [-category] [-tags] -n note     Add a note.
+    quip -h                              Print help.
 
+FLAGS:
+    -c, --category string    Descriptive category for note
+    -h, --help               Displays usage
+    -n, --note string        Note content
+    -t, --tag string(s)      Associated tags (allows multiple tags)    
+    -u, --usage              Displays usage
+    -v, --version            Displays version
+
+REQUIREMENTS:
+    Aside from the necessary Perl CPAN modules, quip's only requirement
+    is the creation of a target file for notes.  It takes the path from
+    the QUIP_NOTES environment variable.
+
+EXAMPLES:
+
+    quip -h
+        Prints this help
+
+    quip -n "The quick brown fox"
+        2019-05-22T04:48:03.741,general,'The quick brown fox'
+
+    quip -c idea -n 'Have lunch with Jed' -t lunch -t colleague
+        2019-05-22T06:10:25.095,idea,'Have lunch with Jed',lunch:colleague
         Example:
             quip todo Buy coffee at the store
             quip note Learn more about cats
@@ -170,7 +137,69 @@ USAGE_END
     return;
 }
 
-=back
+1;
+# __END__
+
+=head1 NAME
+
+quip.pl - A simple cli note-taking app
+
+=head1 VERSION
+
+Version 0.000001
+
+=head1 SYNOPSIS
+
+ ./quip.pl -n "Here is a note"
+
+=head1 DESCRIPTION
+
+Quip is a simple CLI for quickly capturing one-line notes or TODO items.
+
+=head1 INTERFACE
+
+=head2 get_config
+
+Loads the quip rc file and returns a hashref of the config info.  If the file
+does not exist, it creates a default template and returns the contents of that
+template.
+
+=head2 quip_dir
+
+Returns the oath to the top-level quip directory.  
+
+Quip looks in the following places for its' artifacts:
+
+    $XDG-CONFIG-HOME        Environment variable described in the
+                            freedesktop.org specification
+
+    /home/<user>/.config    Common default directory for program configs
+
+    /home/<user>/.quip      Fallback to a home directory dotfile
+
+Should the quip directory not exist, quip will create it in one of the above
+directories. 
+
+=head2 default_config
+
+Returns a perl hashref with a default quip configuration.
+
+=head2 save_quip
+
+Takes a hashref as input.  Format:
+
+    {
+        type => Type of message,
+        body => Message body
+
+    }
+
+
+=head2 parse_cmd_args
+
+
+
+=head2 usage
 
 =head1 AUTHOR
 
@@ -178,14 +207,14 @@ Liam McNerney
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (c) 2018, Liam McNerney. All rights reserved.
- 
+Copyright (c) 2019, Liam McNerney. All rights reserved.
+
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself. See L<perlartistic>.
- 
- 
+
+
 =head1 DISCLAIMER OF WARRANTY
- 
+
 BECAUSE THIS SOFTWARE IS LICENSED FREE OF CHARGE, THERE IS NO WARRANTY
 FOR THE SOFTWARE, TO THE EXTENT PERMITTED BY APPLICABLE LAW. EXCEPT WHEN
 OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES
@@ -195,7 +224,7 @@ WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE
 ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE SOFTWARE IS WITH
 YOU. SHOULD THE SOFTWARE PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL
 NECESSARY SERVICING, REPAIR, OR CORRECTION.
- 
+
 IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
 WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MAY MODIFY AND/OR
 REDISTRIBUTE THE SOFTWARE AS PERMITTED BY THE ABOVE LICENCE, BE
