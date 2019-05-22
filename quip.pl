@@ -127,7 +127,9 @@ EXAMPLES:
 
     quip -c idea -n 'Have lunch with Jed' -t lunch -t colleague
         2019-05-22T06:10:25.095,idea,'Have lunch with Jed',lunch:colleague
-
+        Example:
+            quip todo Buy coffee at the store
+            quip note Learn more about cats
 USAGE_END
 
     print $usage;

@@ -15,5 +15,3 @@ Quips are saved to a flat file; this is human-readable, but easily parsed as .cs
 # Configuration
 
 The only configuration `quip` requires is setting then evironment variable `QUIP_NOTES` - all quips will be saved to that file.
-
-
