@@ -1,148 +1,132 @@
 #! /usr/bin/env perl
+
 use strict;
 use warnings;
 
-our $VERSION = "0.001_001";
+our $VERSION = "0.000_001";
 $VERSION = eval $VERSION;
 
-=head1 NAME
-
-quip.pl - A simple cli note-taking app
-
-=head1 SYNOPSIS
-
-This rev. of quip uses Vimwiki for storage, mostly because I'm using Vimwiki and 
-keeping everything in one place appeals to me.
-
-At present there are two uses for quip in Vimwiki:
-    - Recording todo items
-    - Recording short notes and reminders
-
-More use cases may present themselves; for now, I'm limiting this to these two
-pages.
-
-=head1 DESCRIPTION
-
-
-
-=over 4
-
-=cut
-
 use Carp;
-use Data::Dumper;
+use File::Path qw( make_path );
 use File::Spec;
 use Getopt::Long qw( :config gnu_compat );
-use POSIX( 'strftime' );
-use Storable;
+use POSIX ( 'strftime' );
 use Time::HiRes( 'time' );
+use YAML::XS qw( Dump Load LoadFile );
 
-use Data::Dumper;
+# Process the command args
+my $opts = parse_cmd_args();
 
-#--------------------------------------------------------------------------#
-
-# Get the call options.
-my $opts = _parse_cmd_args();
-
-# print Dumper $opts;
-
-# At this point we can save either a TODO item or a note.
-my $result;
-
-$result = _save_note();
-
-sub _save_note {
-    my $note = $opts->{note};
-
-    # Does the note page exist?  If not, create it and update index.wiki
-    my $page_name = ( $opts->{page} ) ? $opts->{page} : ( $opts->{action} ) ? 'todo' : 'note';
-
-    my $note_page = _get_wiki_page( $page_name );    
-    # Format note
-    my $ts        = POSIX::strftime( "%Y-%m-%d", localtime );
-    $note         = "[$ts] - $note\n";
-
-    # Add checkbox for TODO items
-    if ( $opts->{action} ) {
-        $note = '[ ] ' . $note;
-    }
-
-    open my $nh, '>>', $note_page or croak( "Could not open $note_page: $! | $@" );
-    print $nh "    * $note";
-    close $nh;
-
-    return;
+# Check whether the notes file is available
+my $file = $ENV{QUIP_NOTES};
+if ( not defined $file ) {
+    croak 'No QUIP_NOTES path defined!';
+}
+if ( not -f $file ) {
+    print "$file does not seem to exist; I'll try creating it\n";
 }
 
-sub _get_wiki_page {
-    my ( $page ) = @_;
+# Format the note
+my $record = sprintf(
+    "%s,%s,'%s'",
+    get_timestamp(),
+    $opts->{category},
+    $opts->{note},
+);
 
-    my $wiki_dir  = '';
-    my $page_name = $page . '.wiki';
-
-    if ( ! -d $wiki_dir ) {
-        croak( "Could not find Vimwiki directory; exiting!\n" );
-    }
-
-    # Check for page; if it doesn't exist, create it and update index.wiki
-    my $page_file = File::Spec->catfile( $wiki_dir, $page_name );
-    if ( ! -e $page_file ) {
-        print "$page_file does not exist; creating\n";
-
-        open my $fh, '>', $page_file or croak( "Could not create $page_file: $! | $@" );
-        print $fh "= Quip Notes =\n";
-        close $fh;
-
-        # Update index.wiki
-        my $index_file = File::Spec->catfile( $wiki_dir, 'index.wiki' );
-        open $fh, '>>', $index_file or croak( "Could not open $index_file: $! | $@" );
-        print $fh "* [[$page]] - Quip file\n";
-        close $fh;
-    }
-
-    return $page_file;
+if ( $opts->{tag} ) {
+    $record .= ',' . join( ':', @{ $opts->{tag} } );
 }
 
-sub _parse_cmd_args {
+$record .= "\n";
+
+# Save
+open my $fh, '>>', $file or croak "Could not open $file: $!";
+print $fh $record;
+close $fh or croak "Could not close $file: $!";
+
+exit 0;
+
+## Returns a millisecond-accurate date/time stamp
+sub get_timestamp {
+    my ( $t ) = @_; 
+
+    # If a timestamp was not supplied, use the system time
+    if ( not $t ) { 
+        $t = time;
+    }   
+    my $ts = POSIX::strftime( "%Y-%m-%dT%H:%M:%S", localtime $t );
+
+    # Append milliseconds
+    $ts .= sprintf ".%03d", ( $t - int( $t ) ) * 1000;
+
+    return $ts;
+}
+
+sub parse_cmd_args {
     my $opts = {};  # hashref for processed command options
-    my @options = qw(
-        action|a
-        note|n=s
-        page|p=s
-        usage|help|h|u
-    );
 
+    my @options = qw(
+        version|v
+        usage|u|help|h
+		category|c=s
+        tag|t=s@
+        note|n=s
+    );
     GetOptions( $opts, @options );
 
-    # If usage option is present, display usage and exit
-    if ( $opts->{usage} ) {
-        print _usage();
+    if ( $opts->{version} ) {
+        print "$VERSION\n";
         exit 0;
     }
 
-    # If the note option is NOT present, return an error, display usage, and exit.
-    if ( not $opts->{note} ) {
-        print "Whoops!  You didn't give me a note to save!\n";
-        print _usage();
-        exit 1;
+    if ( $opts->{usage} ) {
+        print usage();
+        exit 0;
     }
+
+    # If no category was provided, default to 'general'
+    $opts->{category} = 'general' if not defined $opts->{category};
 
     return $opts;
 }
 
-sub _usage {
+sub usage {
     my $usage = <<"USAGE_END";
 
-quip.pl 
+quip.pl
 version: $VERSION
 
+Quip is a simple tool for capturing timestamped, tagged notes from
+the command line.
+
 USAGE:
-    quip --note note             Add a note.
-         [--action]              Optionally make the note an action item. 
-         [--page page]           Optionally specify a page.  If this is not set,
-                                 this will default to 'note' for a note, or 'todo'
-                                 for an action item.  
-    quip help|h|usage            Print help.
+    quip [-category] [-tags] -n note     Add a note.
+    quip -h                              Print help.
+
+FLAGS:
+    -c, --category string    Descriptive category for note
+    -h, --help               Displays usage
+    -n, --note string        Note content
+    -t, --tag string(s)      Associated tags (allows multiple tags)    
+    -u, --usage              Displays usage
+    -v, --version            Displays version
+
+REQUIREMENTS:
+    Aside from the necessary Perl CPAN modules, quip's only requirement
+    is the creation of a target file for notes.  It takes the path from
+    the QUIP_NOTES environment variable.
+
+EXAMPLES:
+
+    quip -h
+        Prints this help
+
+    quip -n "The quick brown fox"
+        2019-05-22T04:48:03.741,general,'The quick brown fox'
+
+    quip -c idea -n 'Have lunch with Jed' -t lunch -t colleague
+        2019-05-22T06:10:25.095,idea,'Have lunch with Jed',lunch:colleague
 
 USAGE_END
 
@@ -151,7 +135,69 @@ USAGE_END
     return;
 }
 
-=back
+1;
+# __END__
+
+=head1 NAME
+
+quip.pl - A simple cli note-taking app
+
+=head1 VERSION
+
+Version 0.000001
+
+=head1 SYNOPSIS
+
+ ./quip.pl -n "Here is a note"
+
+=head1 DESCRIPTION
+
+Quip is a simple CLI for quickly capturing one-line notes or TODO items.
+
+=head1 INTERFACE
+
+=head2 get_config
+
+Loads the quip rc file and returns a hashref of the config info.  If the file
+does not exist, it creates a default template and returns the contents of that
+template.
+
+=head2 quip_dir
+
+Returns the oath to the top-level quip directory.  
+
+Quip looks in the following places for its' artifacts:
+
+    $XDG-CONFIG-HOME        Environment variable described in the
+                            freedesktop.org specification
+
+    /home/<user>/.config    Common default directory for program configs
+
+    /home/<user>/.quip      Fallback to a home directory dotfile
+
+Should the quip directory not exist, quip will create it in one of the above
+directories. 
+
+=head2 default_config
+
+Returns a perl hashref with a default quip configuration.
+
+=head2 save_quip
+
+Takes a hashref as input.  Format:
+
+    {
+        type => Type of message,
+        body => Message body
+
+    }
+
+
+=head2 parse_cmd_args
+
+
+
+=head2 usage
 
 =head1 AUTHOR
 
@@ -159,14 +205,14 @@ Liam McNerney
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (c) 2017, Liam McNerney. All rights reserved.
- 
+Copyright (c) 2019, Liam McNerney. All rights reserved.
+
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself. See L<perlartistic>.
- 
- 
+
+
 =head1 DISCLAIMER OF WARRANTY
- 
+
 BECAUSE THIS SOFTWARE IS LICENSED FREE OF CHARGE, THERE IS NO WARRANTY
 FOR THE SOFTWARE, TO THE EXTENT PERMITTED BY APPLICABLE LAW. EXCEPT WHEN
 OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES
@@ -176,7 +222,7 @@ WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE
 ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE SOFTWARE IS WITH
 YOU. SHOULD THE SOFTWARE PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL
 NECESSARY SERVICING, REPAIR, OR CORRECTION.
- 
+
 IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
 WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MAY MODIFY AND/OR
 REDISTRIBUTE THE SOFTWARE AS PERMITTED BY THE ABOVE LICENCE, BE
