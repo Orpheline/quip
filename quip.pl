@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 
-our $VERSION = "0.000_001";
+our $VERSION = "0.000_002";
 $VERSION = eval $VERSION;
 
 use Carp;
@@ -12,7 +12,7 @@ use File::Spec;
 use Getopt::Long qw( :config gnu_compat );
 use POSIX ( 'strftime' );
 use Time::HiRes( 'time' );
-use YAML::XS qw( Dump Load LoadFile );
+use YAML::XS qw( DumpFile LoadFile );
 
 # Process the command args
 my $opts = parse_cmd_args();
@@ -26,24 +26,24 @@ if ( not -f $file ) {
     print "$file does not seem to exist; I'll try creating it\n";
 }
 
+# Read in the file
+my $records = LoadFile( $file );
+
 # Format the note
-my $record = sprintf(
-    "%s,%s,'%s'",
-    get_timestamp(),
-    $opts->{category},
-    $opts->{note},
-);
+my $rec = {
+    timestamp => get_timestamp(),
+    note => $opts->{note},
+};
 
 if ( $opts->{tag} ) {
-    $record .= ',' . join( ':', @{ $opts->{tag} } );
+    for my $tag ( @{ $opts->{tag} } ) {
+        push @{ $rec->{tags} }, $tag;
+    } 
 }
 
-$record .= "\n";
+push @{ $records->{$opts->{category} } }, $rec;
 
-# Save
-open my $fh, '>>', $file or croak "Could not open $file: $!";
-print $fh $record;
-close $fh or croak "Could not close $file: $!";
+DumpFile( $file, $records );
 
 exit 0;
 
@@ -97,8 +97,12 @@ sub usage {
 quip.pl
 version: $VERSION
 
+SYNOPSIS
+
 Quip is a simple tool for capturing timestamped, tagged notes from
 the command line.
+
+Notes are saved as YAML, making them human-readable and easily parsable
 
 USAGE:
     quip [-category] [-tags] -n note     Add a note.
@@ -123,13 +127,22 @@ EXAMPLES:
         Prints this help
 
     quip -n "The quick brown fox"
-        2019-05-22T04:48:03.741,general,'The quick brown fox'
+
+        ---
+        general:
+        - note: The quick brown fox
+          timestamp: 2019-05-22T04:48:03.741
 
     quip -c idea -n 'Have lunch with Jed' -t lunch -t colleague
-        2019-05-22T06:10:25.095,idea,'Have lunch with Jed',lunch:colleague
-        Example:
-            quip todo Buy coffee at the store
-            quip note Learn more about cats
+
+        ---
+        idea:
+        - note: Have lunch with Jed
+          tags:
+          - lunch
+          - colleague
+          timestamp: 2019-05-22T06:10:25.095
+
 USAGE_END
 
     print $usage;
@@ -154,52 +167,7 @@ Version 0.000001
 
 =head1 DESCRIPTION
 
-Quip is a simple CLI for quickly capturing one-line notes or TODO items.
-
-=head1 INTERFACE
-
-=head2 get_config
-
-Loads the quip rc file and returns a hashref of the config info.  If the file
-does not exist, it creates a default template and returns the contents of that
-template.
-
-=head2 quip_dir
-
-Returns the oath to the top-level quip directory.  
-
-Quip looks in the following places for its' artifacts:
-
-    $XDG-CONFIG-HOME        Environment variable described in the
-                            freedesktop.org specification
-
-    /home/<user>/.config    Common default directory for program configs
-
-    /home/<user>/.quip      Fallback to a home directory dotfile
-
-Should the quip directory not exist, quip will create it in one of the above
-directories. 
-
-=head2 default_config
-
-Returns a perl hashref with a default quip configuration.
-
-=head2 save_quip
-
-Takes a hashref as input.  Format:
-
-    {
-        type => Type of message,
-        body => Message body
-
-    }
-
-
-=head2 parse_cmd_args
-
-
-
-=head2 usage
+Quip is a simple CLI for quickly capturing one-line notes.
 
 =head1 AUTHOR
 
